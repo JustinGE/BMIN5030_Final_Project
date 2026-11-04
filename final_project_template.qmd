@@ -1,7 +1,7 @@
 ---
-title: "Your Title"
+title: "Lifestyle, Socioeconomic Circumstances, and Healthcare Access Associated with Self-Reported Diabetes: An Analysis of BRFSS 2025"
 subtitle: "BMIN5030 Final Project"
-author: "FirstName LastName"
+author: "Qijia Ge"
 format: html
 editor: visual
 number-sections: true
@@ -16,11 +16,23 @@ Use this template to complete your project throughout the course. Your Final Pro
 
 Give a brief a description of your project and its goal(s), what data you are using to complete it, and what two faculty/staff in different fields you have spoken to about your project with a brief summary of what you learned from each person. Include a link to your final project GitHub repository.
 
+This project will use the 2025 Behavioral Risk Factor Surveillance System (BRFSS) <https://www.cdc.gov/brfss/annual_data/annual_2025.html> to investigate whether lifestyle, socioeconomic, and healthcare-access characteristics improve classification of self-reported diagnosed diabetes beyond age, sex, and body mass index. Logistic regression will provide an interpretable baseline, while XGBoost will assess whether nonlinear relationships and interactions improve predictive performance. Particular attention will be given to potentially less obvious predictors, including sleep duration, healthcare affordability, and having a regular healthcare provider, to assess their additional predictive value.
+
+**Planned consultation topics:** Feedback will be sought on selecting and interpreting these less obvious features, establishing appropriate baseline and advanced models, and evaluating performance while avoiding data leakage. These are proposed discussion topics with the faculty/staff this week rather than completed feedback.
+
+**GitHub repository:** \[<https://github.com/JustinGE/BMIN5030_Final_Project.git>\]
+
 ## Introduction {#sec-introduction}
 
 Describe the problem addressed, its significance, and some background to motivate the problem. This should extend what is in the @sec-overview.
 
 Explain why your problem is interdisciplinary, what fields can contribute to its understanding, and incorporate background related to what you learned from meeting with faculty/staff.
+
+Diabetes is a major public health challenge: the World Health Organization estimates that the number of people living with diabetes increased from approximately 200 million in 1990 to 830 million in 2022. Diabetes can also lead to serious complications, including kidney failure, blindness, heart attacks, stroke, and lower-limb amputation \[1\]. Understanding how everyday behaviors and social circumstances relate to diagnosed diabetes may help inform prevention and efforts to address health disparities. This project will use BRFSS 2025 to investigate whether lifestyle, socioeconomic, and healthcare-access characteristics improve classification of self-reported diagnosed diabetes beyond age, sex, and body mass index. Particular attention will be given to sleep duration, healthcare affordability, and having a regular healthcare provider. Because the data are cross-sectional and the outcome reflects a reported diagnosis, findings will be interpreted as associations that may reflect both disease occurrence and opportunities for detection.
+
+This project integrates epidemiology, social and behavioral science, health services research, and machine learning. Epidemiology provides approaches for interpreting survey data and accounting for confounding, while social and behavioral science helps explain how individual circumstances may relate to health behaviors. Health services research contributes an understanding of how access to care may influence diagnosis, and machine learning enables comparisons between interpretable logistic regression and XGBoost models that capture nonlinear relationships and interactions. Planned faculty/staff consultations will help refine the selection of less obvious predictors and establish appropriate model comparisons and evaluation strategies, including safeguards against data leakage. Specific feedback and its influence on the project will be incorporated after these consultations.
+
+\[1\] “Diabetes.” Accessed: Nov. 04, 2026. \[Online\]. Available: <https://www.who.int/news-room/fact-sheets/detail/diabetes>
 
 ## Methods {#sec-methods}
 
