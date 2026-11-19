@@ -12,7 +12,7 @@ embed-resources: true
 
 Use this template to complete your project throughout the course. Your Final Project presentation will be based on the contents of this document. Replace the title/name above and text below with your own, but keep the headers. Feel free to change the theme and other display settings, although this is not required.
 
-## Overview {#sec-overview}
+## 1. Overview {#sec-overview}
 
 Give a brief a description of your project and its goal(s), what data you are using to complete it, and what two faculty/staff in different fields you have spoken to about your project with a brief summary of what you learned from each person. Include a link to your final project GitHub repository.
 
@@ -22,7 +22,7 @@ This project will use the 2025 Behavioral Risk Factor Surveillance System (BRFSS
 
 **GitHub repository:** \[<https://github.com/JustinGE/BMIN5030_Final_Project.git>\]
 
-## Introduction {#sec-introduction}
+## 2. Introduction {#sec-introduction}
 
 Describe the problem addressed, its significance, and some background to motivate the problem. This should extend what is in the @sec-overview.
 
@@ -34,13 +34,810 @@ This project integrates epidemiology, social and behavioral science, health serv
 
 \[1\] “Diabetes.” Accessed: Nov. 04, 2026. \[Online\]. Available: <https://www.who.int/news-room/fact-sheets/detail/diabetes>
 
-## Methods {#sec-methods}
+## 3. Methods {#sec-methods}
 
-Describe the data used and general methodological approach used to address the problem described in the @sec-introduction. Subsequently, incorporate full R code necessary to retrieve and clean data, and perform analysis. Be sure to include a description of code so that others (including your future self) can understand what you are doing and why.
+[Describe the data used and general methodological approach used to address the problem described in the @sec-introduction. Subsequently, incorporate full R code necessary to retrieve and clean data, and perform analysis. Be sure to include a description of code so that others (including your future self) can understand what you are doing and why.]
 
-## Results {#sec-results}
+### 3.1 Data Preprocessing
 
-Describe your results and include relevant tables, plots, and code/comments used to obtain them. You may refer to the @sec-methods as needed. End with a brief conclusion of your findings related to the question you set out to address. You can include references if you'd like, but this is not required.
+#### 3.1.1 Importing and inspecting the data
+
+We imported the full 2025 Behavioral Risk Factor Surveillance System (BRFSS) public-use dataset before selecting variables for analysis. Each row represents a survey respondent. The columns include survey responses, calculated variables, and information about the survey design. We first checked the size of the dataset and reviewed the names and descriptions of its columns to understand what information was available.
+
+```{r}
+list.files(
+  "/Users/justinge/Downloads/BMIN 5030/Final Project/BMIN 5030 Final Project",
+  pattern = "LLCP2025.XPT",
+  ignore.case = TRUE,
+  recursive = TRUE
+)
+
+brfss_path <- "LLCP2025.XPT "
+file.exists(brfss_path)
+```
+
+```{r}
+
+brfss_full <- haven::read_xpt(brfss_path)
+
+data.frame(
+  Respondents = nrow(brfss_full),
+  Columns = ncol(brfss_full)
+)
+```
+
+```{r}
+column_inventory <- data.frame(
+  Variable = names(brfss_full),
+  Description = vapply(brfss_full, function(column) {
+    label <- attr(column, "label")
+    if (is.null(label)) "" else label
+  }, character(1))
+)
+
+knitr::kable(
+  column_inventory,
+  row.names = FALSE,
+  caption = "Variables in the imported 2025 BRFSS dataset"
+)
+```
+
+The imported 2025 BRFSS dataset contained 356,158 survey records and 283 variables. Each row represents one respondent. The columns include direct survey responses, calculated variables, and information used to describe the survey design. The table below lists each variable and its description as stored in the data file.
+
+```{r}
+preview_columns <- c("DIABETE4", "_AGEG5YR", "SEXVAR", "_BMI5", "EXERANY2")
+
+knitr::kable(
+  head(brfss_full[, preview_columns]),
+  row.names = FALSE,
+  caption = "Example respondent records before preprocessing"
+)
+```
+
+#### 3.1.2 Inspecting the diabetes outcome
+
+We first examined `DIABETE4`, which records whether respondents report having been told by a healthcare professional that they have diabetes. We tabulated the original responses before creating a binary outcome because the survey distinguishes a diabetes diagnosis from pregnancy-only diabetes, prediabetes, and uncertain or missing responses.
+
+```{r}
+diabetes_response <- factor(
+  brfss_full$DIABETE4,
+  levels = c(1, 2, 3, 4, 7, 9),
+  labels = c(
+    "Yes",
+    "Yes, only during pregnancy",
+    "No",
+    "Prediabetes or borderline diabetes",
+    "Don't know / not sure",
+    "Refused"
+  )
+)
+
+diabetes_counts <- as.data.frame(
+  table(diabetes_response, useNA = "always")
+)
+names(diabetes_counts) <- c("Survey response", "Respondents")
+diabetes_counts$`Survey response` <- as.character(diabetes_counts$`Survey response`)
+diabetes_counts$`Survey response`[is.na(diabetes_counts$`Survey response`)] <- "Missing"
+
+knitr::kable(
+  diabetes_counts,
+  caption = "Unweighted counts of original diabetes survey responses"
+)
+```
+
+```{r}
+ggplot2::ggplot(
+  diabetes_counts,
+  ggplot2::aes(
+    x = Respondents,
+    y = reorder(`Survey response`, Respondents)
+  )
+) +
+  ggplot2::geom_col(fill = "#287A8A") +
+  ggplot2::scale_x_continuous(labels = scales::label_comma()) +
+  ggplot2::labs(
+    title = "Most BRFSS respondents answered No to the diabetes question",
+    subtitle = "Original 2025 survey responses before recoding",
+    x = "Number of respondents (unweighted)",
+    y = NULL
+  ) +
+  ggplot2::theme_minimal()
+```
+
+#### 3.1.3 Defining the binary outcome
+
+We recoded `DIABETE4` into a binary outcome indicating whether respondents reported a diabetes diagnosis outside pregnancy. A response of “Yes” was coded as 1, while “No,” pregnancy-only diabetes, and prediabetes or borderline diabetes were coded as 0. Uncertain, refused, and missing responses were coded as missing and excluded from the modeling sample.
+
+```{r}
+brfss_model <- brfss_full |>
+  dplyr::mutate(
+    diabetes = dplyr::case_when(
+      DIABETE4 == 1 ~ 1L,
+      DIABETE4 %in% c(2, 3, 4) ~ 0L,
+      TRUE ~ NA_integer_
+    )
+  )
+
+# Check the new outcome before removing any rows.
+table(brfss_model$diabetes, useNA = "always")
+
+# Keep respondents with a known outcome.
+brfss_model <- brfss_model |>
+  dplyr::filter(!is.na(diabetes))
+
+nrow(brfss_model)
+```
+
+**3.1.4 Selecting candidate predictors**
+
+We created a working dataset containing the binary diabetes outcome and grouped candidate predictors into four categories: baseline characteristics, lifestyle, socioeconomic circumstances, and healthcare access. These groups allow us to test whether the additional variables improve classification beyond age group, sex, and BMI. Survey design variables were retained separately from the predictors. All respondents with a known diabetes outcome were kept at this stage; we examined predictor coding and missingness before applying any further exclusions.
+
+```{r}
+analysis_columns <- c(
+  "diabetes",
+  "_AGEG5YR", "SEXVAR", "_BMI5",                  # Baseline
+  "EXERANY2", "_SMOKER3", "SLEPTIM1",
+  "ALCDAY4", "_FRUTSU1", "_VEGESU1",              # Lifestyle
+  "INCOME3", "EDUCA", "EMPLOY1", "RENTHOM1",      # Socioeconomic
+  "PRIMINS2", "PERSDOC3", "MEDCOST1", "CHECKUP1", # Healthcare access
+  "_LLCPWT", "_STSTR", "_PSU"                     # Survey design only
+)
+
+brfss_analysis <- brfss_model[, analysis_columns]
+dim(brfss_analysis)
+```
+
+```{r}
+predictor_names <- setdiff(
+  analysis_columns,
+  c("diabetes", "_LLCPWT", "_STSTR", "_PSU")
+)
+
+predictor_audit <- data.frame(
+  Variable = predictor_names,
+  Distinct_recorded_values = vapply(
+    brfss_analysis[predictor_names],
+    function(x) length(unique(x[!is.na(x)])),
+    integer(1)
+  ),
+  Raw_blanks = colSums(is.na(brfss_analysis[predictor_names])),
+  row.names = NULL
+)
+
+knitr::kable(predictor_audit, caption = "Initial audit of candidate predictors")
+```
+
+#### 3.1.5 Cleaning the baseline predictors
+
+```{r}
+brfss_clean <- brfss_analysis |>
+  dplyr::mutate(
+    age_group = factor(
+      `_AGEG5YR`,
+      levels = 1:13,
+      labels = c(
+        "18–24", "25–29", "30–34", "35–39", "40–44", "45–49",
+        "50–54", "55–59", "60–64", "65–69", "70–74", "75–79", "80+"
+      )
+    ),
+    sex = factor(
+      SEXVAR,
+      levels = c(1, 2),
+      labels = c("Male", "Female")
+    ),
+    bmi = as.numeric(`_BMI5`) / 100
+  )
+
+table(brfss_clean$age_group, useNA = "always")
+table(brfss_clean$sex, useNA = "always")
+summary(brfss_clean$bmi)
+nrow(brfss_clean)
+```
+
+We converted age-group and sex codes into labeled categories and treated the code for unknown age as missing. We divided the CDC-derived BMI values by 100 to restore their original scale. These transformations created the three baseline predictors while retaining all respondents at this stage.
+
+#### 3.1.6 Cleaning the lifestyle predictors
+
+```{r}
+table(brfss_analysis$SLEPTIM1, useNA = "always")
+
+brfss_clean <- brfss_clean |>
+  dplyr::mutate(
+    sleep_hours = dplyr::if_else(
+      SLEPTIM1 %in% 1:24,
+      as.numeric(SLEPTIM1),
+      NA_real_
+    )
+  )
+
+# Verify the recode
+table(brfss_clean$sleep_hours, useNA = "always")
+```
+
+We retained reported sleep durations of 1–24 hours per day. Responses coded as “don’t know” or “refused” were set to missing, along with blank responses. We retained these respondents at this stage so that we could assess missingness across all selected predictors before deciding how to handle incomplete records.
+
+```{r}
+# Inspect the original response codes.
+table(brfss_clean$EXERANY2, useNA = "always")
+table(brfss_clean$`_SMOKER3`, useNA = "always")
+
+# Add the cleaned variables to the existing table.
+brfss_clean <- brfss_clean |>
+  dplyr::mutate(
+    physical_activity = factor(
+      EXERANY2,
+      levels = c(2, 1),
+      labels = c("No", "Yes")
+    ),
+    smoking_status = factor(
+      `_SMOKER3`,
+      levels = c(4, 3, 2, 1),
+      labels = c("Never", "Former", "Current some days", "Current daily")
+    )
+  )
+
+# Check the cleaned categories and confirm the row count.
+table(brfss_clean$physical_activity, useNA = "always")
+table(brfss_clean$smoking_status, useNA = "always")
+nrow(brfss_clean)
+```
+
+We recoded reported leisure-time physical activity in the past month as a yes/no variable and used the CDC-derived smoking status variable to distinguish never, former, and current smokers. We retained the distinction between daily and some-day smoking and set unknown responses to missing. No respondents were removed during this step.
+
+```{r}
+# Inspect the original alcohol codes and diet ranges.
+table(brfss_clean$ALCDAY4, useNA = "always")
+summary(as.numeric(brfss_clean$`_FRUTSU1`))
+summary(as.numeric(brfss_clean$`_VEGESU1`))
+
+# Add the cleaned variables while keeping the original columns.
+brfss_clean <- brfss_clean |>
+  dplyr::mutate(
+    alcohol_days_week = dplyr::case_when(
+      ALCDAY4 %in% 101:107 ~ as.numeric(ALCDAY4) - 100,
+      ALCDAY4 %in% 201:230 ~ (as.numeric(ALCDAY4) - 200) * 7 / 30,
+      ALCDAY4 == 888 ~ 0,
+      TRUE ~ NA_real_
+    ),
+    fruit_times_day = dplyr::if_else(
+      `_FRUTSU1` %in% 0:99998,
+      as.numeric(`_FRUTSU1`) / 100,
+      NA_real_
+    ),
+    vegetable_times_day = dplyr::if_else(
+      `_VEGESU1` %in% 0:99998,
+      as.numeric(`_VEGESU1`) / 100,
+      NA_real_
+    )
+  )
+
+intake_vars <- c("alcohol_days_week", "fruit_times_day", "vegetable_times_day")
+
+summary(brfss_clean[intake_vars])
+colSums(is.na(brfss_clean[intake_vars]))
+nrow(brfss_clean)
+```
+
+We converted reported alcohol use frequency to days per week, retaining zero for respondents who reported no alcohol use in the past 30 days. We divided the CDC-derived fruit and vegetable totals by 100 to recover daily consumption frequencies. Unusable values were coded as missing, and all respondents were retained during this step.
+
+```{r}
+# Count values flagged as out of range before changing them.
+diet_check <- data.frame(
+  Predictor = c("Fruit intake", "Vegetable intake"),
+  Missing_before = c(
+    sum(is.na(brfss_clean$fruit_times_day)),
+    sum(is.na(brfss_clean$vegetable_times_day))
+  ),
+  Above_CDC_threshold = c(
+    sum(brfss_clean$fruit_times_day > 16, na.rm = TRUE),
+    sum(brfss_clean$vegetable_times_day > 23, na.rm = TRUE)
+  )
+)
+
+knitr::kable(diet_check, caption = "Missing and out-of-range diet values")
+
+brfss_clean <- brfss_clean |>
+  dplyr::mutate(
+    fruit_times_day = replace(fruit_times_day, fruit_times_day > 16, NA_real_),
+    vegetable_times_day = replace(
+      vegetable_times_day, vegetable_times_day > 23, NA_real_
+    )
+  )
+
+summary(brfss_clean[c("fruit_times_day", "vegetable_times_day")])
+```
+
+We inspected the distributions of the converted dietary frequencies and found unusually high values. Using the CDC’s out-of-range thresholds, we set fruit intake above 16 times per day and vegetable intake above 23 times per day to missing. We retained the respondents and their other survey responses.
+
+```{r}
+#| fig-width: 9
+#| fig-height: 4
+
+diet_plot <- brfss_clean |>
+  dplyr::select(fruit_times_day, vegetable_times_day) |>
+  tidyr::pivot_longer(
+    cols = dplyr::everything(),
+    names_to = "food",
+    values_to = "times_per_day",
+    values_drop_na = TRUE
+  ) |>
+  dplyr::mutate(
+    food = factor(
+      food,
+      levels = c("fruit_times_day", "vegetable_times_day"),
+      labels = c("Fruit", "Vegetables")
+    )
+  )
+
+ggplot2::ggplot(diet_plot, ggplot2::aes(x = times_per_day)) +
+  ggplot2::geom_histogram(
+    binwidth = 0.5, boundary = 0,
+    fill = "#287A8A", color = "white"
+  ) +
+  ggplot2::facet_wrap(~ food, nrow = 1) +
+  ggplot2::scale_y_continuous(labels = scales::label_comma()) +
+  ggplot2::labs(
+    title = "Daily fruit and vegetable intake frequency after cleaning",
+    subtitle = "Unweighted counts among respondents with a valid value for each measure",
+    x = "Reported times per day",
+    y = "Number of respondents"
+  ) +
+  ggplot2::theme_minimal()
+```
+
+#### 3.1.7 Cleaning socioeconomic predictors
+
+```{r}
+socioeconomic_vars <- c("INCOME3", "EDUCA", "EMPLOY1", "RENTHOM1")
+
+lapply(
+  brfss_clean[socioeconomic_vars],
+  function(x) table(x, useNA = "always")
+)
+```
+
+```{r}
+brfss_clean <- brfss_clean |>
+  dplyr::mutate(
+    income_group = factor(
+      INCOME3,
+      levels = 1:11,
+      labels = c(
+        "Under $10,000",
+        "$10,000–<$15,000",
+        "$15,000–<$20,000",
+        "$20,000–<$25,000",
+        "$25,000–<$35,000",
+        "$35,000–<$50,000",
+        "$50,000–<$75,000",
+        "$75,000–<$100,000",
+        "$100,000–<$150,000",
+        "$150,000–<$200,000",
+        "$200,000 or more"
+      )
+    ),
+    education = factor(
+      EDUCA,
+      levels = 1:6,
+      labels = c(
+        "Never attended school / kindergarten only",
+        "Grades 1–8",
+        "Grades 9–11",
+        "High school graduate / GED",
+        "Some college / technical school",
+        "College graduate"
+      )
+    ),
+    employment = factor(
+      EMPLOY1,
+      levels = 1:8,
+      labels = c(
+        "Employed for wages",
+        "Self-employed",
+        "Out of work: 1 year or more",
+        "Out of work: less than 1 year",
+        "Homemaker",
+        "Student",
+        "Retired",
+        "Unable to work"
+      )
+    ),
+    housing_tenure = factor(
+      RENTHOM1,
+      levels = 1:3,
+      labels = c("Own", "Rent", "Other arrangement")
+    )
+  )
+
+clean_socioeconomic <- c(
+  "income_group", "education", "employment", "housing_tenure"
+)
+
+lapply(
+  brfss_clean[clean_socioeconomic],
+  function(x) table(x, useNA = "always")
+)
+
+colSums(is.na(brfss_clean[clean_socioeconomic]))
+nrow(brfss_clean)
+```
+
+We converted household income, education, employment status, and housing tenure into labeled categorical predictors. Unknown, refused, and blank responses were treated as missing. Income brackets were retained as categories rather than converted to dollar amounts. No respondents were removed during this step.
+
+After recoding, income had the highest missingness among these predictors (19.9%), compared with education (0.6%), employment (2.0%), and housing tenure (1.0%). We deferred decisions about incomplete records until all selected predictors had been cleaned.
+
+#### 3.1.8 Cleaning Healthcare-access predictors
+
+```{r}
+healthcare_vars <- c("PRIMINS2", "PERSDOC3", "MEDCOST1", "CHECKUP1")
+
+lapply(
+  brfss_clean[healthcare_vars],
+  function(x) table(x, useNA = "always")
+)
+```
+
+```{r}
+brfss_clean <- brfss_clean |>
+  dplyr::mutate(
+    coverage_type = factor(
+      PRIMINS2,
+      levels = c(1:10, 88),
+      labels = c(
+        "Employer / union",
+        "Privately purchased",
+        "Medicare",
+        "Medigap",
+        "Medicaid",
+        "CHIP",
+        "Military / VA",
+        "Indian Health Service",
+        "State-sponsored plan",
+        "Other government program",
+        "No coverage"
+      )
+    ),
+    personal_provider = factor(
+      PERSDOC3,
+      levels = c(3, 1, 2),
+      labels = c("None", "One provider / group", "More than one")
+    ),
+    cost_barrier = factor(
+      MEDCOST1,
+      levels = c(2, 1),
+      labels = c("No", "Yes")
+    ),
+    checkup_recency = factor(
+      CHECKUP1,
+      levels = c(1, 2, 3, 4, 8),
+      labels = c(
+        "Within past year",
+        "1–<2 years ago",
+        "2–<5 years ago",
+        "5 or more years ago",
+        "Never"
+      )
+    )
+  )
+
+clean_healthcare <- c(
+  "coverage_type", "personal_provider",
+  "cost_barrier", "checkup_recency"
+)
+
+lapply(
+  brfss_clean[clean_healthcare],
+  function(x) table(x, useNA = "always")
+)
+
+colSums(is.na(brfss_clean[clean_healthcare]))
+nrow(brfss_clean)
+```
+
+We converted primary healthcare coverage, personal healthcare provider availability, cost-related barriers to care, and routine checkup recency into labeled categorical predictors. Unknown and refused responses were treated as missing. Responses indicating no coverage, no personal provider, or never having a routine checkup were retained as valid categories. No respondents were removed during this step.
+
+### 3.2 Assessing missingness after preprocessing
+
+After cleaning all selected predictors, we summarized the number and percentage of missing values for each variable. We also counted respondents with complete information across all predictors to assess how many records would be excluded by a complete-case analysis.
+
+```{r}
+# Only cleaned predictors—not raw columns or survey design fields.
+clean_predictors <- c(
+  "age_group", "sex", "bmi",
+  "physical_activity", "smoking_status", "sleep_hours",
+  "alcohol_days_week", "fruit_times_day", "vegetable_times_day",
+  "income_group", "education", "employment", "housing_tenure",
+  "coverage_type", "personal_provider", "cost_barrier", "checkup_recency"
+)
+
+missing_summary <- data.frame(
+  Predictor = clean_predictors,
+  Missing = colSums(is.na(brfss_clean[clean_predictors])),
+  row.names = NULL
+)
+
+missing_summary$Missing_percent <- round(
+  100 * missing_summary$Missing / nrow(brfss_clean), 1
+)
+
+missing_summary <- missing_summary[
+  order(missing_summary$Missing, decreasing = TRUE),
+]
+
+knitr::kable(
+  missing_summary,
+  caption = "Missingness in cleaned predictors"
+)
+
+# Count complete records without deleting anything.
+complete_rows <- complete.cases(brfss_clean[clean_predictors])
+
+sample_summary <- data.frame(
+  Outcome_known = nrow(brfss_clean),
+  Complete_predictors = sum(complete_rows),
+  At_least_one_missing = sum(!complete_rows),
+  Complete_percent = round(100 * mean(complete_rows), 1)
+)
+
+knitr::kable(
+  sample_summary,
+  caption = "Availability of complete predictor information"
+)
+```
+
+Of the 355,376 respondents with a known diabetes outcome, 223,526 (62.9%) had complete information across all 17 selected predictors. The remaining 131,850 (37.1%) had at least one missing predictor. Income had the highest missingness (19.9%), followed by vegetable intake (15.5%) and fruit intake (13.3%). Because complete-case exclusion would remove a substantial proportion of respondents, we examined outcome differences between complete and incomplete records before selecting a missing-data strategy.
+
+```{r}
+completeness_comparison <- brfss_clean |>
+  dplyr::mutate(
+    predictor_completeness = ifelse(
+      complete_rows,
+      "All predictors available",
+      "At least one predictor missing"
+    )
+  ) |>
+  dplyr::group_by(predictor_completeness) |>
+  dplyr::summarise(
+    Respondents = dplyr::n(),
+    Reported_diabetes = sum(diabetes == 1),
+    Diabetes_percent = round(100 * mean(diabetes), 2),
+    .groups = "drop"
+  )
+
+knitr::kable(
+  completeness_comparison,
+  caption = "Unweighted diabetes proportions by predictor completeness"
+)
+```
+
+```{r}
+# Keep the outcome and cleaned predictors, then retain complete records.
+model_data <- brfss_clean |>
+  dplyr::select(diabetes, dplyr::all_of(clean_predictors)) |>
+  tidyr::drop_na()
+
+# Verify the final modeling sample.
+dim(model_data)
+table(model_data$diabetes)
+sum(is.na(model_data))
+```
+
+We used a complete-case analysis, retaining respondents with nonmissing values for all 17 selected predictors. This produced a common sample for comparing baseline and expanded models, ensuring that differences in performance would not reflect differences in the respondents evaluated. The final modeling dataset contained 223,526 respondents, including 32,820 (14.68%) reporting diagnosed diabetes. Although this retained a large sample, excluding 37.1% of respondents with a known outcome may introduce selection bias.
+
+### 3.3 Analysis strategy and survey weighting
+
+Unweighted analysis and planned survey-weighted sensitivity analyses:
+
+The initial analysis will describe the observed sample without applying survey weights. Among the 355,376 respondents with a known diabetes outcome, 51,827 (14.58%) reported diagnosed diabetes. After restricting the modeling sample to respondents with complete information for all selected predictors, this proportion was 14.68% (32,820 of 223,526). These percentages describe the respondents included in the analysis and should not be interpreted as population prevalence estimates.
+
+Logistic regression and XGBoost will first be compared using unweighted performance on the same held-out test set. This provides a consistent comparison of their ability to classify reported diabetes among complete-case respondents.
+
+Two survey-weighted analyses are planned as follow-up checks:
+
+- **Descriptive analysis:** Estimate diagnosed diabetes prevalence in the population covered by BRFSS using the full survey dataset, appropriate weights, and survey design information.
+
+- **Predictive evaluation:** Recalculate test-set performance using survey weights to examine whether the model comparison changes.
+
+Survey design variables (`_LLCPWT`, `_STSTR`, and `_PSU`) will be preserved for these analyses but excluded from model predictors. Weighting does not automatically correct for complete-case exclusions, so weighted predictive results will still be interpreted with this limitation.
+
+```{r}
+survey_fields <- c("_LLCPWT", "_STSTR", "_PSU")
+
+# Keep complete-case respondents, their cleaned predictors,
+# and their corresponding survey design information together.
+split_data <- brfss_clean |>
+  dplyr::filter(
+    complete.cases(dplyr::pick(dplyr::all_of(clean_predictors)))
+  ) |>
+  dplyr::select(
+    diabetes,
+    dplyr::all_of(clean_predictors),
+    dplyr::all_of(survey_fields)
+  )
+
+stopifnot(
+  nrow(split_data) == 223526,
+  !anyNA(split_data[c("diabetes", clean_predictors)])
+)
+
+dim(split_data)
+```
+
+### 3.4 Training and test split
+
+We divided the complete-case dataset into training (80%) and test (20%) sets, stratified by reported diabetes status to maintain similar outcome proportions in both sets. A fixed random seed ensured reproducibility. All models will use the same split. Model fitting and tuning will use the training set only, while the test set will be reserved for final evaluation. Survey design variables remain attached to respondents but will not be used as predictors.
+
+```{r}
+set.seed(5030)
+
+# Label the outcome; "Yes" is the positive class.
+split_data <- split_data |>
+  dplyr::mutate(
+    diabetes = factor(
+      diabetes,
+      levels = c(1, 0),
+      labels = c("Yes", "No")
+    )
+  )
+
+data_split <- rsample::initial_split(
+  split_data,
+  prop = 0.80,
+  strata = diabetes
+)
+
+train_data <- rsample::training(data_split)
+test_data <- rsample::testing(data_split)
+
+# Check the sample size and outcome proportion in each set.
+split_summary <- dplyr::bind_rows(
+  train_data |>
+    dplyr::summarise(
+      Dataset = "Training",
+      Respondents = dplyr::n(),
+      Reported_diabetes = sum(diabetes == "Yes"),
+      Diabetes_percent = round(100 * mean(diabetes == "Yes"), 2)
+    ),
+  test_data |>
+    dplyr::summarise(
+      Dataset = "Test",
+      Respondents = dplyr::n(),
+      Reported_diabetes = sum(diabetes == "Yes"),
+      Diabetes_percent = round(100 * mean(diabetes == "Yes"), 2)
+    )
+)
+
+knitr::kable(
+  split_summary,
+  caption = "Training and test sample characteristics"
+)
+
+# stratification splits the respondents within the diabetes categories, so boths sets can have approximately diabetes percentage
+```
+
+## 4. Results {#sec-results}
+
+[Describe your results and include relevant tables, plots, and code/comments used to obtain them. You may refer to the @sec-methods as needed. End with a brief conclusion of your findings related to the question you set out to address. You can include references if you'd like, but this is not required.]
+
+### 4.1 Model development
+
+We used five-fold cross-validation within the training set, stratified by diabetes status. All candidate models used the same folds, and XGBoost hyperparameters were selected using cross-validation performance. The test set was reserved for final evaluation and was not used for model selection or tuning.
+
+```{r}
+set.seed(5030)
+
+cv_folds <- rsample::vfold_cv(
+  train_data,
+  v = 5,
+  strata = diabetes
+)
+
+cv_folds
+```
+
+#### 4.1.1 Baseline logistic regression
+
+We fitted an unweighted logistic regression model using age group, sex, and BMI as baseline predictors. The model estimates the probability of reporting a diabetes diagnosis. Age group and sex were treated as categorical variables, while BMI was entered as a continuous predictor. Only training data were used to estimate the model coefficients.
+
+```{r}
+baseline_lr <- stats::glm(
+  I(diabetes == "Yes") ~ age_group + sex + bmi,
+  data = train_data,
+  family = stats::binomial(link = "logit")
+)
+
+summary(baseline_lr)
+
+# Confirm that estimation converged and used all training records.
+baseline_lr$converged
+stats::nobs(baseline_lr)
+```
+
+The baseline logistic regression converged using all 178,820 training respondents. Higher BMI and most older age categories were associated with higher odds of self-reported diagnosed diabetes, while female respondents had lower adjusted odds than male respondents. These fitted associations do not establish causation or predictive performance; performance will be assessed using cross-validation.
+
+We evaluated the baseline logistic regression using five-fold cross-validation within the training set. In each round, the model was fitted on four folds and evaluated on the remaining fold. We measured ROC AUC and precision–recall AUC to assess discrimination, and the Brier score to assess the accuracy of predicted probabilities. The held-out test set was not used.
+
+```{r}
+# Fit and evaluate the baseline separately within each fold.
+baseline_cv_results <- lapply(seq_len(nrow(cv_folds)), function(i) {
+  
+  # Separate this fold's fitting and validation records.
+  fold_train <- rsample::analysis(cv_folds$splits[[i]])
+  fold_validation <- rsample::assessment(cv_folds$splits[[i]])
+  
+  # Refit the model using only this fold's fitting records.
+  fold_model <- stats::glm(
+    I(diabetes == "Yes") ~ age_group + sex + bmi,
+    data = fold_train,
+    family = stats::binomial(link = "logit")
+  )
+  
+  # Predict the probability of diabetes in the validation records.
+  predicted_probability <- stats::predict(
+    fold_model,
+    newdata = fold_validation,
+    type = "response"
+  )
+  
+  # Calculate validation performance.
+  data.frame(
+    Fold = cv_folds$id[i],
+    Training_n = nrow(fold_train),
+    Validation_n = nrow(fold_validation),
+    Converged = fold_model$converged,
+    
+    ROC_AUC = yardstick::roc_auc_vec(
+      truth = fold_validation$diabetes,
+      estimate = predicted_probability,
+      event_level = "first"
+    ),
+    
+    PR_AUC = yardstick::pr_auc_vec(
+      truth = fold_validation$diabetes,
+      estimate = predicted_probability,
+      event_level = "first"
+    ),
+    
+    Brier_score = mean(
+      (predicted_probability -
+         as.integer(fold_validation$diabetes == "Yes"))^2
+    )
+  )
+})
+
+# Combine the five rounds into one table.
+baseline_cv_results <- dplyr::bind_rows(baseline_cv_results)
+
+knitr::kable(
+  baseline_cv_results,
+  digits = 4,
+  caption = "Baseline logistic regression: five-fold validation results"
+)
+```
+
+```{r}
+baseline_cv_summary <- baseline_cv_results |>
+  dplyr::summarise(
+    ROC_AUC_mean = mean(ROC_AUC),
+    ROC_AUC_sd = sd(ROC_AUC),
+    PR_AUC_mean = mean(PR_AUC),
+    PR_AUC_sd = sd(PR_AUC),
+    Brier_mean = mean(Brier_score),
+    Brier_sd = sd(Brier_score)
+  )
+
+knitr::kable(
+  baseline_cv_summary,
+  digits = 4,
+  caption = "Mean and standard deviation of baseline validation performance"
+)
+```
+
+Across five-fold cross-validation, the baseline logistic regression achieved a mean ROC AUC of 0.7425 (SD 0.0025), a mean precision–recall AUC of 0.3023 (SD 0.0043), and a mean Brier score of 0.1141 (SD 0.0004). Performance varied little across folds, and all model fits converged. These results establish a reference for assessing whether lifestyle, socioeconomic, and healthcare-access characteristics provide additional predictive information beyond age, sex, and BMI.
+
+The next stage will extend logistic regression to include lifestyle, socioeconomic, and healthcare-access predictors and assess whether these improve classification beyond age, sex, and BMI. We will also develop an XGBoost model to examine whether nonlinear relationships and interactions improve performance. All models will use the same five cross-validation folds, with XGBoost hyperparameters selected within the training data. The held-out test set will remain reserved for final evaluation.
+
+Survey-weighted analyses will subsequently estimate diagnosed diabetes prevalence in the population covered by BRFSS and assess whether weighting changes the test-set model comparison. Survey weights, strata, and sampling units will be retained for the appropriate analyses but excluded from model predictors. Interpretation will acknowledge that survey weighting does not automatically correct for the exclusion of respondents with missing predictors.
 
 ## Conclusion
 
